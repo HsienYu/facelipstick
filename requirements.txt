@@ -1,0 +1,5 @@
+syphon-python
+mediapipe
+opencv-python
+numpy
+noise
