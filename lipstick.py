@@ -172,12 +172,6 @@ frame_counter = 0  # Counter for changing targets
 WINDOW_WIDTH = 720
 WINDOW_HEIGHT = 480
 
-# Add after frame dimensions
-MASK_WINDOW_NAME = 'Mask Monitor'
-cv2.namedWindow(MASK_WINDOW_NAME, cv2.WINDOW_NORMAL)
-cv2.resizeWindow(MASK_WINDOW_NAME, WINDOW_WIDTH,
-                 WINDOW_HEIGHT)  # Set mask window size
-
 cv2.namedWindow('Lipstick Lines', cv2.WINDOW_NORMAL)
 cv2.resizeWindow('Lipstick Lines', WINDOW_WIDTH,
                  WINDOW_HEIGHT)  # Set main window size
@@ -331,9 +325,11 @@ def create_texture_descriptor(width, height):
     return descriptor
 
 
+# Modify point_in_contour to bypass contour checks when contour is None
 def point_in_contour(point, contour):
-    """Check if point is inside contour"""
-    # Convert point to the correct format (float32)
+    """Check if point is inside contour; if no contour, return True"""
+    if contour is None:
+        return True
     pt = (float(point[0]), float(point[1]))
     return cv2.pointPolygonTest(contour, pt, False) >= 0
 
@@ -381,21 +377,24 @@ def update_line_positions(lines, velocities, contour):
 
 
 # Increased max_dist from 120
-def create_static_mesh(line_points, contour, max_dist=MESH_MAX_DIST, min_dist=MESH_MIN_DIST, explosion_mode=False):
-    """Create mesh by connecting line endpoints with wider connections"""
+def create_static_mesh(line_points, contour, max_dist=MESH_MAX_DIST, min_dist=MESH_MIN_DIST, explosion_mode=False, max_neighbors=3):
+    """Create mesh by connecting line endpoints with limited connections per point for a natural appearance"""
     mesh_lines = []
     if len(line_points) < 4:
         return mesh_lines
 
     # Convert all points to integer tuples
     line_points = [(int(p[0]), int(p[1])) for p in line_points]
-
-    # Always store original line pairs first
+    
+    # Always add original line pairs first and track connection counts
+    connections = {i: 0 for i in range(len(line_points))}
     for i in range(0, len(line_points), 2):
         if i+1 < len(line_points):
             mesh_lines.append((line_points[i], line_points[i+1]))
+            connections[i] += 1
+            connections[i+1] += 1
 
-    # Use explosion parameters or normal mesh parameters
+    # Use explosion or normal parameters
     if explosion_mode:
         max_dist = EXPLOSION_MESH_DIST
         min_dist = MIN_MESH_DIST
@@ -403,16 +402,21 @@ def create_static_mesh(line_points, contour, max_dist=MESH_MAX_DIST, min_dist=ME
     else:
         connect_prob = MESH_CONNECT_PROB
 
-    # Connect between all points
+    # Connect between all points while limiting maximum neighbors per point
     for i in range(len(line_points)):
+        if connections[i] >= max_neighbors:
+            continue
         for j in range(i+1, len(line_points)):
+            if connections[j] >= max_neighbors:
+                continue
             p1, p2 = line_points[i], line_points[j]
             dist = np.sqrt((p1[0]-p2[0])**2 + (p1[1]-p2[1])**2)
-
-            if min_dist <= dist <= max_dist:
-                if random.random() < connect_prob:
-                    if explosion_mode or point_in_contour(p1, contour) or point_in_contour(p2, contour):
-                        mesh_lines.append((p1, p2))
+            if min_dist <= dist <= max_dist and random.random() < connect_prob:
+                mesh_lines.append((p1, p2))
+                connections[i] += 1
+                connections[j] += 1
+                if connections[i] >= max_neighbors:
+                    break
 
     return mesh_lines
 
@@ -611,31 +615,6 @@ def update_manual_movement(points, velocities, direction, contour):
     # Return True if enough points stayed within bounds
     return points_in_contour >= len(points) * MIN_POINTS_IN_CONTOUR
 
-# Add this function before the main loop
-
-
-def create_explosion_velocities(points, center=None):
-    """Create velocities for explosive movement from center point"""
-    velocities = []
-    if center is None:
-        # Use average position of all points as center
-        center = (
-            sum(p[0] for p in points) / len(points),
-            sum(p[1] for p in points) / len(points)
-        )
-
-    for point in points:
-        # Calculate direction from center
-        dx = point[0] - center[0]
-        dy = point[1] - center[1]
-        # Normalize and add some randomness
-        dist = math.sqrt(dx*dx + dy*dy) or 1.0
-        dx = (dx/dist + random.uniform(-0.3, 0.3)) * EXPLOSION_SPEED
-        dy = (dy/dist + random.uniform(-0.3, 0.3)) * EXPLOSION_SPEED
-        velocities.append((dx, dy))
-
-    return velocities
-
 
 def optimize_contour_operations(mask):
     """Optimize contour detection with caching"""
@@ -807,57 +786,56 @@ while True:
         mesh_frame = np.zeros((height, width, 3), dtype=np.uint8)
         line_frame = np.zeros((height, width, 3), dtype=np.uint8)
 
-        if contours:
-            largest_contour = max(contours, key=cv2.contourArea)
-            update_mesh_points(line_points, point_velocities, largest_contour)
+        # Instead of obtaining contours for mesh mode, pass None
+        update_mesh_points(line_points, point_velocities, None)
 
-            # Draw all connections
-            mesh_lines = create_static_mesh(
-                line_points,
-                largest_contour,
-                explosion_mode=mouse_follow_mode
-            )
+        # Draw all connections
+        mesh_lines = create_static_mesh(
+            line_points,
+            None,  # no contour reference
+            explosion_mode=mouse_follow_mode
+        )
 
-            # Draw original lines first
-            for i in range(0, len(line_points), 2):
-                if i+1 < len(line_points):
-                    cv2.line(
-                        line_frame,
-                        line_points[i],
-                        line_points[i+1],
-                        (0, 0, 255),
-                        LINE_THICKNESS,
-                        cv2.LINE_AA
-                    )
+        # Draw original lines first
+        for i in range(0, len(line_points), 2):
+            if i+1 < len(line_points):
+                cv2.line(
+                    line_frame,
+                    line_points[i],
+                    line_points[i+1],
+                    (0, 0, 255),
+                    LINE_THICKNESS,
+                    cv2.LINE_AA
+                )
 
-            # Draw mesh connections
-            for p1, p2 in mesh_lines:
-                try:
-                    cv2.line(
-                        mesh_frame,
-                        (int(p1[0]), int(p1[1])),
-                        (int(p2[0]), int(p2[1])),
-                        (0, 0, 255),
-                        # Slightly thinner lines for mesh
-                        max(1, LINE_THICKNESS-1),
-                        cv2.LINE_AA
-                    )
-                except Exception as e:
-                    continue
+        # Draw mesh connections
+        for p1, p2 in mesh_lines:
+            try:
+                cv2.line(
+                    mesh_frame,
+                    (int(p1[0]), int(p1[1])),
+                    (int(p2[0]), int(p2[1])),
+                    (0, 0, 255),
+                    # Slightly thinner lines for mesh
+                    max(1, LINE_THICKNESS-1),
+                    cv2.LINE_AA
+                )
+            except Exception as e:
+                continue
 
-            # Blend frames with transition
-            blended = cv2.addWeighted(
-                line_frame,
-                1.0 - transition_alpha,
-                mesh_frame,
-                transition_alpha,
-                0
-            )
-            result = blended
+        # Blend frames with transition
+        blended = cv2.addWeighted(
+            line_frame,
+            1.0 - transition_alpha,
+            mesh_frame,
+            transition_alpha,
+            0
+        )
+        result = blended
 
-            # Update transition alpha more slowly
-            if transition_alpha < 1.0:
-                transition_alpha = min(1.0, transition_alpha + 0.02)
+        # Update transition alpha more slowly
+        if transition_alpha < 1.0:
+            transition_alpha = min(1.0, transition_alpha + 0.02)
     else:
         # Use black background when showing only lines
         if show_only_lines:
