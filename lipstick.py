@@ -8,7 +8,8 @@ from collections import deque
 import gc  # Add garbage collector
 import subprocess  # Add for camera listing
 
-# Define function to list cameras
+
+# List available cameras
 def list_cameras():
     try:
         result = subprocess.run(
@@ -21,30 +22,14 @@ def list_cameras():
         print(f"Error listing cameras: {e}")
         return []
 
-# List available cameras
+
 camera_devices = list_cameras()
-if not camera_devices:
-    print("No cameras detected. Using default camera (0)")
-    camera_choice = 0
-else:
-    print("Choose a camera: ")
-    for i, device in enumerate(camera_devices):
-        print(f"{i}: {device}")
-    
-    # Add error handling for camera selection
-    try:
-        user_input = input("Enter the camera number (or press Enter for default): ")
-        camera_choice = int(user_input) if user_input.strip() else 0
-        
-        # Validate camera choice is within range
-        if camera_choice < 0 or camera_choice >= len(camera_devices):
-            print(f"Invalid camera number. Using default camera (0)")
-            camera_choice = 0
-        else:
-            print(f"Using camera: {camera_devices[camera_choice]}")
-    except ValueError:
-        print("Invalid input. Using default camera (0)")
-        camera_choice = 0
+print("Choose a camera: ")
+for i, device in enumerate(camera_devices):
+    print(f"{i}: {device}")
+camera_choice = int(input("Enter the camera number: "))
+camera_device = list(camera_devices)[camera_choice]
+print(f"Using camera: {camera_device}")
 
 # Add resolution selection with error handling
 print("\nChoose resolution:")
@@ -62,9 +47,10 @@ for i, res in enumerate(resolutions):
 
 # Add error handling for resolution selection
 try:
-    user_input = input("Enter resolution number (or press Enter for default): ")
+    user_input = input(
+        "Enter resolution number (or press Enter for default): ")
     resolution_choice = int(user_input) if user_input.strip() else 0
-    
+
     # Validate resolution choice is within range
     if resolution_choice < 0 or resolution_choice >= len(resolutions):
         print(f"Invalid resolution. Using default: {resolutions[0]['name']}")
@@ -385,7 +371,7 @@ def create_static_mesh(line_points, contour, max_dist=MESH_MAX_DIST, min_dist=ME
 
     # Convert all points to integer tuples
     line_points = [(int(p[0]), int(p[1])) for p in line_points]
-    
+
     # Always add original line pairs first and track connection counts
     connections = {i: 0 for i in range(len(line_points))}
     for i in range(0, len(line_points), 2):
@@ -443,15 +429,15 @@ def update_mesh_points(points, velocities, contour):
             continue
 
         x, y = points[i]
-        
+
         # Ensure x and y are within reasonable range
         x = max(-MAX_SAFE_COORDINATE, min(MAX_SAFE_COORDINATE, x))
         y = max(-MAX_SAFE_COORDINATE, min(MAX_SAFE_COORDINATE, y))
-        
+
         # Convert to regular float to prevent overflow
         vx = float(velocities[i][0])
         vy = float(velocities[i][1])
-        
+
         # Ensure velocities are within reasonable range
         vx = max(-MAX_SAFE_VELOCITY, min(MAX_SAFE_VELOCITY, vx))
         vy = max(-MAX_SAFE_VELOCITY, min(MAX_SAFE_VELOCITY, vy))
@@ -466,13 +452,15 @@ def update_mesh_points(points, velocities, contour):
 
             if new_x <= 0 or new_x >= width:
                 # Apply bounce with safety checks
-                bounce_factor = min(EDGE_BOUNCE_FACTOR, 3.0)  # Limit bounce factor
+                # Limit bounce factor
+                bounce_factor = min(EDGE_BOUNCE_FACTOR, 3.0)
                 vx = -vx * bounce_factor
                 bounce_occurred = True
-                
+
             if new_y <= 0 or new_y >= height:
                 # Apply bounce with safety checks
-                bounce_factor = min(EDGE_BOUNCE_FACTOR, 3.0)  # Limit bounce factor
+                # Limit bounce factor
+                bounce_factor = min(EDGE_BOUNCE_FACTOR, 3.0)
                 vy = -vy * bounce_factor
                 bounce_occurred = True
 
@@ -486,7 +474,7 @@ def update_mesh_points(points, velocities, contour):
                 speed = math.sqrt(vx*vx + vy*vy)
                 # Add upper limit to speed to prevent overflow
                 speed = min(speed, MAX_SAFE_VELOCITY)
-                
+
                 if speed > MIN_EXPLOSION_SPEED:
                     vx *= EXPLOSION_DECAY
                     vy *= EXPLOSION_DECAY
@@ -498,7 +486,7 @@ def update_mesh_points(points, velocities, contour):
             # Ensure final position is within valid screen coordinates
             nx = max(0, min(width-1, int(new_x)))
             ny = max(0, min(height-1, int(new_y)))
-            
+
             points[i] = (nx, ny)
             velocities[i] = (vx, vy)
         else:
@@ -528,7 +516,7 @@ def update_mesh_points(points, velocities, contour):
                 nx = max(0, min(width-1, int(new_x)))
                 ny = max(0, min(height-1, int(new_y)))
                 new_point = (nx, ny)
-                
+
                 try:
                     # Check point within contour with error handling
                     if cv2.pointPolygonTest(contour, (float(nx), float(ny)), True) > -BOUNDARY_TOLERANCE:
@@ -539,7 +527,8 @@ def update_mesh_points(points, velocities, contour):
                 except:
                     # On any error, use safe fallback
                     points[i] = (nx, ny)
-                    velocities[i] = (random.uniform(-0.1, 0.1), random.uniform(-0.1, 0.1))
+                    velocities[i] = (random.uniform(-0.1, 0.1),
+                                     random.uniform(-0.1, 0.1))
 
 
 # Also fix create_explosion_velocities function with better bounds
@@ -555,16 +544,16 @@ def create_explosion_velocities(points, center=None):
 
     # Use reduced explosion speed for safety
     safe_explosion_speed = min(EXPLOSION_SPEED, 8.0)
-    
+
     for point in points:
         try:
             # Calculate direction from center
             dx = point[0] - center[0]
             dy = point[1] - center[1]
-            
+
             # Normalize and add some randomness with safety
             dist = math.sqrt(dx*dx + dy*dy) or 1.0  # Avoid division by zero
-            
+
             # Ensure direction is valid (not NaN)
             if math.isnan(dx/dist) or math.isnan(dy/dist):
                 dx = random.uniform(-1, 1)
@@ -572,8 +561,9 @@ def create_explosion_velocities(points, center=None):
             else:
                 dx = dx/dist + random.uniform(-0.2, 0.2)  # Reduced randomness
                 dy = dy/dist + random.uniform(-0.2, 0.2)  # Reduced randomness
-                
-            velocities.append((dx * safe_explosion_speed, dy * safe_explosion_speed))
+
+            velocities.append((dx * safe_explosion_speed,
+                              dy * safe_explosion_speed))
         except:
             # On any error, add a random safe velocity
             velocities.append((random.uniform(-2, 2), random.uniform(-2, 2)))
