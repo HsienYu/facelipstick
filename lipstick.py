@@ -137,11 +137,18 @@ current_direction = None  # Store current movement direction
 DIRECTION_CHANGE_PROB = 0.45  # Higher probability for individual direction changes
 MIN_POINTS_IN_CONTOUR = 0.3  # Allow movement if 30% of points stay in contour
 NODE_MOVE_RANGE = 50  # Increased from 30
-BOUNDARY_TOLERANCE = 300  # Distance allowed outside contour
-MAX_SPEED = 3.0  # Increased maximum speed for points
+BOUNDARY_TOLERANCE = 500  # Distance allowed outside contour
+MAX_SPEED = 20.0  # Increased maximum speed for points
 
 # Add after other global variables
-LINE_THICKNESS = 2  # Increased line thickness
+LINE_THICKNESS = 3  # Increased line thickness
+
+# Add these constants after LINE_THICKNESS
+LINE_MOVEMENT_SPEED = 10.0  # Base movement speed for lines
+LINE_ACCELERATION = 0.5    # Maximum random acceleration
+VIVID_DIRECTION_CHANGE_PROB = 0.5  # Probability of direction change
+LINE_BOUNCE_ENERGY = 1.2   # Bounce energy retention factor
+LINE_RANDOM_IMPULSE_PROB = 0.03  # Probability of random impulse
 
 # Add after other global variables
 mouse_pos = (0, 0)  # Store current mouse position
@@ -149,7 +156,7 @@ MOUSE_FOLLOW_SPEED = 0.1  # Speed at which points follow mouse
 mouse_follow_mode = False  # Toggle for mouse following
 
 # Add after other global variables
-RANDOM_MOVE_SPEED = 5.0  # Speed for random movement
+RANDOM_MOVE_SPEED = 9.0  # Speed for random movement
 TARGET_CHANGE_INTERVAL = 60  # Frames before changing random target
 target_positions = []  # Store target positions for each point
 frame_counter = 0  # Counter for changing targets
@@ -174,12 +181,15 @@ MIN_MESH_DIST = 30  # Minimum distance for mesh connections
 MESH_PROBABILITY = 0.6  # Probability of creating mesh connections
 
 # Add these constants after other global variables
-INITIAL_MESH_SPEED = 0.05  # Reduced initial speed
-MESH_ACCELERATION = 0.0005  # Reduced acceleration
-MAX_MESH_SPEED = 0.3  # Reduced max speed
+INITIAL_MESH_SPEED = 0.1  # Increased from 0.05
+MESH_ACCELERATION = 0.002  # Increased from 0.0005
+MAX_MESH_SPEED = 0.6  # Increased from 0.3
 MESH_MIN_DIST = 20  # Minimum distance for mesh connections
 MESH_MAX_DIST = 150  # Maximum distance for initial mesh connections
-MESH_CONNECT_PROB = 0.8  # Probability of creating mesh connections
+MESH_CONNECT_PROB = 0.85  # Increased from 0.8
+VIVID_FACTOR = 1.5  # New constant for vivid movement
+BOUNDARY_BOUNCE_ENERGY = 1.2  # New constant for energetic boundary bounces
+DIRECTION_CHANGE_FREQ = 0.15  # New constant for direction changes
 current_mesh_speed = INITIAL_MESH_SPEED  # Current speed for mesh transitions
 
 # Add constants for performance tuning
@@ -321,7 +331,7 @@ def point_in_contour(point, contour):
 
 
 def update_line_positions(lines, velocities, contour):
-    """Update line positions while keeping them inside contour"""
+    """Update line positions with more vivid movement"""
     if not contour.any():
         return
 
@@ -333,7 +343,30 @@ def update_line_positions(lines, velocities, contour):
             x, y = lines[point_idx]
             vx, vy = velocities[point_idx]
 
-            # Update position
+            # Apply random acceleration for more vivid movement
+            vx += random.uniform(-LINE_ACCELERATION, LINE_ACCELERATION)
+            vy += random.uniform(-LINE_ACCELERATION, LINE_ACCELERATION)
+
+            # Occasional drastic direction changes for more dynamic movement
+            if random.random() < VIVID_DIRECTION_CHANGE_PROB:
+                angle = random.uniform(0, 2 * math.pi)
+                strength = random.uniform(0.5, 1.5) * LINE_MOVEMENT_SPEED
+                vx = strength * math.cos(angle)
+                vy = strength * math.sin(angle)
+
+            # Random impulses for sudden movements
+            if random.random() < LINE_RANDOM_IMPULSE_PROB:
+                vx += random.uniform(-2, 2)
+                vy += random.uniform(-2, 2)
+
+            # Speed up slow-moving points
+            speed = math.sqrt(vx*vx + vy*vy)
+            if speed < 0.5:
+                boost_factor = random.uniform(1.5, 2.5)
+                vx *= boost_factor
+                vy *= boost_factor
+
+            # Update position with enhanced velocity
             new_x = x + vx
             new_y = y + vy
             new_point = (int(new_x), int(new_y))
@@ -341,28 +374,44 @@ def update_line_positions(lines, velocities, contour):
             # Check if new position is inside contour
             if point_in_contour(new_point, contour):
                 lines[point_idx] = new_point
+
+                # If this is endpoint and connected to another one, add slight attraction
+                if i+1 < len(lines) and point_idx == i:
+                    other_point = lines[i+1]
+                    dx = other_point[0] - new_point[0]
+                    dy = other_point[1] - new_point[1]
+                    dist = math.sqrt(dx*dx + dy*dy)
+
+                    # If getting too far apart, add attraction
+                    if dist > 100:
+                        attraction = 0.03
+                        vx += dx * attraction
+                        vy += dy * attraction
+                    # If too close, add repulsion
+                    elif dist < 20:
+                        repulsion = -0.05
+                        vx += dx * repulsion
+                        vy += dy * repulsion
             else:
-                # Reverse velocity if hitting boundary
-                velocities[point_idx] = (-vx * 0.8, -vy * 0.8)
+                # More dynamic bounce when hitting boundary
+                velocities[point_idx] = (-vx *
+                                         LINE_BOUNCE_ENERGY, -vy * LINE_BOUNCE_ENERGY)
 
-            # Add small random acceleration
-            velocities[point_idx] = (
-                vx + random.uniform(-0.1, 0.1),
-                vy + random.uniform(-0.1, 0.1)
-            )
+                # Add slight randomness on bounce for more natural effect
+                vx = -vx * LINE_BOUNCE_ENERGY + random.uniform(-0.5, 0.5)
+                vy = -vy * LINE_BOUNCE_ENERGY + random.uniform(-0.5, 0.5)
 
-            # Limit velocity
-            max_speed = 2.0
-            vx, vy = velocities[point_idx]
+            # Limit max velocity to prevent extreme speeds
+            max_speed = LINE_MOVEMENT_SPEED * 2.0
             speed = math.sqrt(vx*vx + vy*vy)
             if speed > max_speed:
-                velocities[point_idx] = (
-                    vx * max_speed / speed,
-                    vy * max_speed / speed
-                )
+                vx = vx * max_speed / speed
+                vy = vy * max_speed / speed
+
+            # Update velocity
+            velocities[point_idx] = (vx, vy)
 
 
-# Increased max_dist from 120
 def create_static_mesh(line_points, contour, max_dist=MESH_MAX_DIST, min_dist=MESH_MIN_DIST, explosion_mode=False, max_neighbors=3):
     """Create mesh by connecting line endpoints with limited connections per point for a natural appearance"""
     mesh_lines = []
@@ -492,25 +541,38 @@ def update_mesh_points(points, velocities, contour):
         else:
             # Normal mesh movement with overflow protection
             if contour is not None:
-                # Add random acceleration with limits
-                vx += random.uniform(-0.1, 0.1) * current_mesh_speed
-                vy += random.uniform(-0.1, 0.1) * current_mesh_speed
+                # Add more vivid random acceleration with increased values
+                vx += random.uniform(-0.2, 0.2) * \
+                    current_mesh_speed * VIVID_FACTOR
+                vy += random.uniform(-0.2, 0.2) * \
+                    current_mesh_speed * VIVID_FACTOR
+
+                # Random direction changes for more dynamic movement
+                if random.random() < DIRECTION_CHANGE_FREQ:
+                    angle = random.uniform(0, 2 * math.pi)
+                    magnitude = random.uniform(0.5, 1.0) * current_mesh_speed
+                    vx += magnitude * math.cos(angle)
+                    vy += magnitude * math.sin(angle)
 
                 # Check for NaN or infinity
                 if math.isnan(vx) or math.isinf(vx) or math.isnan(vy) or math.isinf(vy):
-                    vx = random.uniform(-0.1, 0.1) * current_mesh_speed
-                    vy = random.uniform(-0.1, 0.1) * current_mesh_speed
+                    vx = random.uniform(-0.1, 0.1) * \
+                        current_mesh_speed * VIVID_FACTOR
+                    vy = random.uniform(-0.1, 0.1) * \
+                        current_mesh_speed * VIVID_FACTOR
 
                 # Apply speed limit with safety check
                 try:
                     speed = math.sqrt(vx*vx + vy*vy)
-                    if speed > current_mesh_speed and speed > 0:
-                        scale = current_mesh_speed / speed
+                    if speed > current_mesh_speed * VIVID_FACTOR and speed > 0:
+                        scale = current_mesh_speed * VIVID_FACTOR / speed
                         vx *= scale
                         vy *= scale
                 except (OverflowError, ZeroDivisionError):
-                    vx = random.uniform(-0.1, 0.1) * current_mesh_speed
-                    vy = random.uniform(-0.1, 0.1) * current_mesh_speed
+                    vx = random.uniform(-0.1, 0.1) * \
+                        current_mesh_speed * VIVID_FACTOR
+                    vy = random.uniform(-0.1, 0.1) * \
+                        current_mesh_speed * VIVID_FACTOR
 
                 # Ensure new point is valid
                 nx = max(0, min(width-1, int(new_x)))
@@ -519,16 +581,26 @@ def update_mesh_points(points, velocities, contour):
 
                 try:
                     # Check point within contour with error handling
-                    if cv2.pointPolygonTest(contour, (float(nx), float(ny)), True) > -BOUNDARY_TOLERANCE:
+                    boundary_dist = cv2.pointPolygonTest(
+                        contour, (float(nx), float(ny)), True)
+                    if boundary_dist > -BOUNDARY_TOLERANCE:
                         points[i] = new_point
+                        # If close to boundary, add perpendicular force component
+                        if -50 < boundary_dist < 10:
+                            # Add force perpendicular to boundary
+                            perp_factor = random.uniform(0.5, 1.5)
+                            vx += random.uniform(-0.3, 0.3) * perp_factor
+                            vy += random.uniform(-0.3, 0.3) * perp_factor
                         velocities[i] = (vx, vy)
                     else:
-                        velocities[i] = (-vx * 0.8, -vy * 0.8)
+                        # More energetic boundary bounce
+                        velocities[i] = (-vx * BOUNDARY_BOUNCE_ENERGY, -
+                                         vy * BOUNDARY_BOUNCE_ENERGY)
                 except:
                     # On any error, use safe fallback
                     points[i] = (nx, ny)
-                    velocities[i] = (random.uniform(-0.1, 0.1),
-                                     random.uniform(-0.1, 0.1))
+                    velocities[i] = (random.uniform(-0.1, 0.1) * VIVID_FACTOR,
+                                     random.uniform(-0.1, 0.1) * VIVID_FACTOR)
 
 
 # Also fix create_explosion_velocities function with better bounds
@@ -542,8 +614,8 @@ def create_explosion_velocities(points, center=None):
             sum(p[1] for p in points) / len(points)
         )
 
-    # Use reduced explosion speed for safety
-    safe_explosion_speed = min(EXPLOSION_SPEED, 8.0)
+    # Use increased explosion speed for more vivid movement
+    safe_explosion_speed = min(EXPLOSION_SPEED * 1.2, 10.0)
 
     for point in points:
         try:
@@ -551,7 +623,7 @@ def create_explosion_velocities(points, center=None):
             dx = point[0] - center[0]
             dy = point[1] - center[1]
 
-            # Normalize and add some randomness with safety
+            # Normalize and add more randomness for vivid movement
             dist = math.sqrt(dx*dx + dy*dy) or 1.0  # Avoid division by zero
 
             # Ensure direction is valid (not NaN)
@@ -559,14 +631,23 @@ def create_explosion_velocities(points, center=None):
                 dx = random.uniform(-1, 1)
                 dy = random.uniform(-1, 1)
             else:
-                dx = dx/dist + random.uniform(-0.2, 0.2)  # Reduced randomness
-                dy = dy/dist + random.uniform(-0.2, 0.2)  # Reduced randomness
+                # Add more variation for interesting patterns
+                dx = dx/dist + random.uniform(-0.4, 0.4)
+                dy = dy/dist + random.uniform(-0.4, 0.4)
 
-            velocities.append((dx * safe_explosion_speed,
-                              dy * safe_explosion_speed))
+                # Add occasional spin component for swirling motion
+                if random.random() < 0.3:
+                    perpendicular_x = -dy / dist * random.uniform(0.5, 1.5)
+                    perpendicular_y = dx / dist * random.uniform(0.5, 1.5)
+                    dx += perpendicular_x
+                    dy += perpendicular_y
+
+            # Vary individual point speed for more dynamic explosion
+            point_speed = safe_explosion_speed * random.uniform(0.7, 1.3)
+            velocities.append((dx * point_speed, dy * point_speed))
         except:
             # On any error, add a random safe velocity
-            velocities.append((random.uniform(-2, 2), random.uniform(-2, 2)))
+            velocities.append((random.uniform(-3, 3), random.uniform(-3, 3)))
 
     return velocities
 
@@ -578,6 +659,60 @@ syphon_server = SyphonMetalServer("Lipstick Effect", device=mtl_device)
 
 # Add after window creation
 cv2.namedWindow('Lipstick Lines')
+
+# Add these constants after other global variables
+MOUSE_DRAWING_MODE = False  # Flag to enable/disable mouse drawing
+MOUSE_LINE_COLOR = (0, 0, 255)  # Red color for mouse-drawn lines
+mouse_pos = (0, 0)  # Current mouse position
+prev_mouse_pos = None  # Previous mouse position for line drawing
+mouse_button_down = False  # Track if mouse button is held down
+MOUSE_LINE_MIN_DISTANCE = 10  # Minimum distance between points for a new line
+
+# Mouse callback function for drawing lines
+
+
+def mouse_callback(event, x, y, flags, param):
+    global mouse_pos, prev_mouse_pos, mouse_button_down, line_points, line_velocities
+
+    mouse_pos = (x, y)
+
+    # Start drawing when left button is pressed
+    if event == cv2.EVENT_LBUTTONDOWN:
+        mouse_button_down = True
+        prev_mouse_pos = (x, y)
+
+    # Stop drawing when button is released
+    elif event == cv2.EVENT_LBUTTONUP:
+        mouse_button_down = False
+        prev_mouse_pos = None
+
+    # Draw line when mouse moves with button pressed
+    elif event == cv2.EVENT_MOUSEMOVE and mouse_button_down and MOUSE_DRAWING_MODE:
+        curr_pos = (x, y)
+
+        # Only add new line if moved sufficient distance
+        if prev_mouse_pos is not None:
+            dx = curr_pos[0] - prev_mouse_pos[0]
+            dy = curr_pos[1] - prev_mouse_pos[1]
+            distance = math.sqrt(dx*dx + dy*dy)
+
+            if distance >= MOUSE_LINE_MIN_DISTANCE:
+                # Add the line endpoints
+                line_points.extend([prev_mouse_pos, curr_pos])
+
+                # Add initial velocities for new line endpoints
+                line_velocities.extend([
+                    (random.uniform(-LINE_MOVEMENT_SPEED/2, LINE_MOVEMENT_SPEED/2),
+                     random.uniform(-LINE_MOVEMENT_SPEED/2, LINE_MOVEMENT_SPEED/2))
+                    for _ in range(2)
+                ])
+
+                # Update prev_mouse_pos for next line segment
+                prev_mouse_pos = curr_pos
+
+
+# Set mouse callback for the main window
+cv2.setMouseCallback('Lipstick Lines', mouse_callback)
 
 # Add this new function before the main loop
 
@@ -676,6 +811,315 @@ def batch_process_mesh_lines(points, max_dist):
     return mesh_lines
 
 
+# Add these constants after LINE_RANDOM_IMPULSE_PROB
+TRIGGER_MOVEMENT_DURATION = 30  # Number of frames for triggered movement
+TRIGGER_IMPULSE_STRENGTH = 5.0  # Strength of initial impulse
+TRIGGER_DECAY_RATE = 0.9  # How quickly the effect decays
+TRIGGER_MIN_SPEED = 0.5  # Minimum speed during triggered movement
+TRIGGER_ROTATION_STRENGTH = 0.1  # Strength of rotational component
+# Add these variables after other global variables
+trigger_movement_active = False  # Flag for manually triggered movement
+trigger_frame_count = 0  # Count frames during triggered movement
+trigger_center = None  # Center point for triggered movement
+
+# Move the function definition to before the main loop
+
+
+def apply_triggered_movement(lines, velocities, contour):
+    """Apply special movement animation when manually triggered with 't' key"""
+    global trigger_frame_count, trigger_movement_active, trigger_center
+
+    # Check if we should end the triggered movement
+    if trigger_frame_count >= TRIGGER_MOVEMENT_DURATION:
+        trigger_movement_active = False
+        trigger_frame_count = 0
+        return
+
+    # First frame of trigger - calculate center and apply impulses
+    if trigger_frame_count == 0:
+        # Calculate center of all points
+        if len(lines) > 0:
+            center_x = sum(p[0] for p in lines) / len(lines)
+            center_y = sum(p[1] for p in lines) / len(lines)
+            trigger_center = (center_x, center_y)
+        else:
+            trigger_center = (width/2, height/2)
+
+        # Apply initial impulse away from center
+        for i in range(len(lines)):
+            # Calculate direction from center
+            dx = lines[i][0] - trigger_center[0]
+            dy = lines[i][1] - trigger_center[1]
+            dist = math.sqrt(dx*dx + dy*dy) or 1.0
+
+            # Normalize and apply impulse
+            angle = math.atan2(dy, dx)
+            impulse_strength = random.uniform(
+                0.5, 1.5) * TRIGGER_IMPULSE_STRENGTH
+
+            # Add rotational component for swirling effect
+            rot_x = -dy / dist * TRIGGER_ROTATION_STRENGTH * trigger_frame_count
+            rot_y = dx / dist * TRIGGER_ROTATION_STRENGTH * trigger_frame_count
+
+            # Combine impulse and rotation
+            vx = (dx / dist) * impulse_strength + rot_x
+            vy = (dy / dist) * impulse_strength + rot_y
+
+            # Add to current velocity
+            current_vx, current_vy = velocities[i]
+            velocities[i] = (current_vx + vx, current_vy + vy)
+
+    # For subsequent frames, apply additional effects
+    else:
+        decay_factor = TRIGGER_DECAY_RATE ** (trigger_frame_count / 5)
+
+        for i in range(len(lines)):
+            vx, vy = velocities[i]
+
+            # Calculate direction from center for rotational effect
+            dx = lines[i][0] - trigger_center[0]
+            dy = lines[i][1] - trigger_center[1]
+            dist = math.sqrt(dx*dx + dy*dy) or 1.0
+
+            # Add rotational component that increases with time
+            rot_strength = TRIGGER_ROTATION_STRENGTH * \
+                min(trigger_frame_count / 5, 2.0)
+            rot_x = -dy / dist * rot_strength
+            rot_y = dx / dist * rot_strength
+
+            # Apply decay to straight-line velocity but maintain rotation
+            vx = vx * decay_factor + rot_x
+            vy = vy * decay_factor + rot_y
+
+            # Ensure minimum speed
+            speed = math.sqrt(vx*vx + vy*vy)
+            if speed < TRIGGER_MIN_SPEED:
+                boost = TRIGGER_MIN_SPEED / speed if speed > 0 else 1.0
+                vx *= boost
+                vy *= boost
+
+            # Update velocity
+            velocities[i] = (vx, vy)
+
+    # Check if contour exists
+    if contour is not None and contour.any():
+        # Update position using standard update function with contour
+        update_line_positions(lines, velocities, contour)
+    else:
+        # No contour available, update positions with a fallback approach
+        for i in range(len(lines)):
+            x, y = lines[i]
+            vx, vy = velocities[i]
+
+            # Update position
+            new_x = x + vx
+            new_y = y + vy
+
+            # Keep within screen bounds
+            new_x = max(0, min(width-1, int(new_x)))
+            new_y = max(0, min(height-1, int(new_y)))
+
+            # Apply the new position
+            lines[i] = (new_x, new_y)
+
+            # Bounce off screen edges
+            if new_x <= 0 or new_x >= width-1:
+                velocities[i] = (-vx * LINE_BOUNCE_ENERGY, vy)
+            if new_y <= 0 or new_y >= height-1:
+                velocities[i] = (vx, -vy * LINE_BOUNCE_ENERGY)
+
+    # Increment frame counter
+    trigger_frame_count += 1
+
+    # Return True to indicate animation is active
+    return True
+
+
+# Add this flag after other global variables
+SHOW_INDICATORS = True  # Flag to control visibility of UI indicators
+
+# Add these constants after other global variables
+FADE_STEPS = 20  # Number of steps in camera fade transition
+FADE_DELAY = 30  # Milliseconds between fade steps
+
+# Add this function before the main loop
+
+
+def perform_camera_fade_transition(frame, overlay):
+    """Fade out camera while keeping red lines visible"""
+    # Create a black background frame
+    black_background = np.zeros_like(frame)
+
+    # Keep a copy of the original frame
+    original_frame = frame.copy()
+
+    # Perform the fade transition
+    for step in range(FADE_STEPS):
+        # Calculate current fade alpha from 1.0 to 0.0
+        current_alpha = 1.0 - (step / FADE_STEPS)
+
+        # Blend the original frame with black background using current alpha
+        faded_frame = cv2.addWeighted(
+            original_frame, current_alpha,
+            black_background, 1.0 - current_alpha,
+            0
+        )
+
+        # Always keep the red lines (overlay) fully visible
+        result = cv2.addWeighted(faded_frame, 1.0, overlay, 1.0, 0)
+
+        # Show the transition frame
+        cv2.imshow('Lipstick Lines', result)
+        cv2.waitKey(FADE_DELAY)  # Control transition speed
+
+    # Return the final frame - just the red lines on black background
+    return overlay
+
+
+# Add these constants after other global variables
+RELEASE_SPEED_MIN = 1.0  # Minimum speed for released lines
+RELEASE_SPEED_MAX = 3.0  # Maximum speed for released lines
+RELEASE_ROTATE_MAX = 0.2  # Maximum rotation speed for released lines
+BLACK_THRESHOLD = 30     # Brightness threshold for avoiding black areas
+AVOID_BLACK_FORCE = 2.0  # Force strength to avoid black areas
+released_lines = False   # Flag to track if lines are released
+
+# Add this function to check if a point is in a dark/black area
+
+
+def is_black_area(frame, point, threshold=BLACK_THRESHOLD):
+    """Check if a point is in a dark/black area of the frame"""
+    x, y = int(point[0]), int(point[1])
+    # Make sure point is within frame bounds
+    if x < 0 or y < 0 or x >= frame.shape[1] or y >= frame.shape[0]:
+        return True
+
+    # Check brightness of the point
+    brightness = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)[y, x]
+    return brightness < threshold
+
+# Add this function to release lines from contours
+
+
+def release_lines_from_contour():
+    """Release line endpoints from contours and give them random velocities"""
+    global line_velocities, released_lines
+
+    if not line_points:
+        return False
+
+    # Set new randomized velocities for all line points
+    line_velocities = []
+    for i in range(len(line_points)):
+        # Random angle and speed
+        angle = random.uniform(0, 2 * math.pi)
+        speed = random.uniform(RELEASE_SPEED_MIN, RELEASE_SPEED_MAX)
+
+        # Add some rotation for pairs (every other pair gets opposite rotation)
+        rotation = random.uniform(-RELEASE_ROTATE_MAX, RELEASE_ROTATE_MAX)
+        if i % 4 >= 2:  # Make pairs rotate in opposite directions
+            rotation = -rotation
+
+        # Set velocity
+        vx = speed * math.cos(angle)
+        vy = speed * math.sin(angle)
+        line_velocities.append((vx, vy))
+
+    released_lines = True
+    return True
+
+# Add this function to handle movement of released lines
+
+
+def update_released_lines(frame, lines, velocities):
+    """Update positions of released lines, avoiding black areas"""
+    if not lines:
+        return
+
+    # Process each endpoint
+    for i in range(len(lines)):
+        if i >= len(velocities):
+            continue
+
+        x, y = lines[i]
+        vx, vy = velocities[i]
+
+        # Calculate new position
+        new_x = x + vx
+        new_y = y + vy
+
+        # Check if new position is within frame bounds
+        in_bounds_x = 0 <= new_x < frame.shape[1]
+        in_bounds_y = 0 <= new_y < frame.shape[0]
+
+        # Check if new position is in a black area
+        if in_bounds_x and in_bounds_y and is_black_area(frame, (new_x, new_y)):
+            # If in black area, apply avoidance force
+            # Sample points around current position to find non-black direction
+            best_dir_x, best_dir_y = 0, 0
+            for angle in range(0, 360, 45):  # Check 8 directions
+                test_x = x + 10 * math.cos(math.radians(angle))
+                test_y = y + 10 * math.sin(math.radians(angle))
+
+                if (0 <= test_x < frame.shape[1] and
+                    0 <= test_y < frame.shape[0] and
+                        not is_black_area(frame, (test_x, test_y))):
+                    # Found non-black direction
+                    best_dir_x += math.cos(math.radians(angle))
+                    best_dir_y += math.sin(math.radians(angle))
+
+            # If we found a good direction, apply force
+            if best_dir_x != 0 or best_dir_y != 0:
+                # Normalize and apply force
+                magnitude = math.sqrt(best_dir_x**2 + best_dir_y**2)
+                if magnitude > 0:
+                    vx += best_dir_x / magnitude * AVOID_BLACK_FORCE
+                    vy += best_dir_y / magnitude * AVOID_BLACK_FORCE
+            else:
+                # No good direction found, reverse direction with some randomness
+                vx = -vx * LINE_BOUNCE_ENERGY + random.uniform(-0.5, 0.5)
+                vy = -vy * LINE_BOUNCE_ENERGY + random.uniform(-0.5, 0.5)
+        else:
+            # Apply the new position if valid and not in black area
+            if in_bounds_x and in_bounds_y:
+                lines[i] = (int(new_x), int(new_y))
+            else:
+                # Bounce off screen edges
+                if not in_bounds_x:
+                    vx = -vx * LINE_BOUNCE_ENERGY
+                if not in_bounds_y:
+                    vy = -vy * LINE_BOUNCE_ENERGY
+
+        # Add slight random acceleration for more natural movement
+        vx += random.uniform(-0.1, 0.1)
+        vy += random.uniform(-0.1, 0.1)
+
+        # Update velocity
+        velocities[i] = (vx, vy)
+
+        # Apply connection constraints for line pairs
+        if i % 2 == 0 and i + 1 < len(lines):
+            # Keep pairs from getting too far apart
+            other_x, other_y = lines[i + 1]
+            dx = other_x - lines[i][0]
+            dy = other_y - lines[i][1]
+            dist = math.sqrt(dx*dx + dy*dy)
+
+            # Apply connection constraint
+            if dist > 100:  # Maximum allowed distance
+                # Add attraction force
+                attraction = 0.05
+                velocities[i] = (vx + dx * attraction, vy + dy * attraction)
+                velocities[i + 1] = (velocities[i + 1][0] - dx * attraction,
+                                     velocities[i + 1][1] - dy * attraction)
+            elif dist < 20:  # Minimum allowed distance
+                # Add repulsion force
+                repulsion = -0.03
+                velocities[i] = (vx + dx * repulsion, vy + dy * repulsion)
+                velocities[i + 1] = (velocities[i + 1][0] - dx * repulsion,
+                                     velocities[i + 1][1] - dy * repulsion)
+
+
 while True:
     frame_count += 1
     if frame_count % FRAME_SKIP != 0:  # Skip frames for performance
@@ -746,9 +1190,10 @@ while True:
 
             # Store line endpoints
             line_points.extend(line_endpoints)
-            # Add initial velocities for new line endpoints
+            # Add initial velocities with more energy for new line endpoints
             line_velocities.extend([
-                (random.uniform(-1, 1), random.uniform(-1, 1))
+                (random.uniform(-LINE_MOVEMENT_SPEED/2, LINE_MOVEMENT_SPEED/2),
+                 random.uniform(-LINE_MOVEMENT_SPEED/2, LINE_MOVEMENT_SPEED/2))
                 for _ in range(2)
             ])
             draw_line = False
@@ -757,18 +1202,35 @@ while True:
 
     # After contour processing, update line positions
     if line_points and not mesh_mode:
-        update_line_positions(line_points, line_velocities, largest_contour)
+        if trigger_movement_active:
+            # Apply special triggered movement with contour safety check
+            apply_triggered_movement(line_points, line_velocities,
+                                     largest_contour if 'largest_contour' in locals() else None)
+        elif released_lines:
+            # Handle released lines movement
+            update_released_lines(frame, line_points, line_velocities)
+        else:
+            # Normal movement - only try if contour exists
+            if 'largest_contour' in locals() and largest_contour is not None and largest_contour.any():
+                update_line_positions(
+                    line_points, line_velocities, largest_contour)
 
         # Redraw all lines in overlay
         overlay = np.zeros((height, width, 3), dtype=np.uint8)
         for i in range(0, len(line_points), 2):
             if i+1 < len(line_points):
+                # Draw lines with pulsating effect when trigger is active
+                thickness = LINE_THICKNESS
+                if trigger_movement_active:
+                    pulse = abs(math.sin(trigger_frame_count * 0.2))
+                    thickness = max(1, int(LINE_THICKNESS * (1 + pulse)))
+
                 cv2.line(
-                    overlay, line_points[i], line_points[i+1], (0, 0, 255), LINE_THICKNESS, cv2.LINE_AA)
+                    overlay, line_points[i], line_points[i+1], (0, 0, 255), thickness, cv2.LINE_AA)
 
     # Visual feedback when 'l' is pressed
-    if draw_line:
-        cv2.putText(frame, "Ready to draw!", (10, 30),
+    if draw_line and SHOW_INDICATORS:
+        cv2.putText(frame, "", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
     # Draw mesh or normal overlay
@@ -833,6 +1295,22 @@ while True:
         else:
             result = cv2.addWeighted(frame, fade_alpha, overlay, 1, 0)
         transition_alpha = 0.0
+
+    # Show mouse drawing mode status and cursor position if enabled
+    if MOUSE_DRAWING_MODE and SHOW_INDICATORS:
+        # Add visual indicator for mouse drawing mode
+        cv2.putText(result, "Drawing Mode (Press 'd' to exit)",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # Draw a circle at the current mouse position as a cursor
+        if not mesh_mode:  # Only show cursor in line mode
+            # Green dot cursor
+            cv2.circle(result, mouse_pos, 5, (0, 255, 0), -1)
+
+            # When mouse button is down, show a line preview from last point
+            if mouse_button_down and prev_mouse_pos is not None:
+                cv2.line(result, prev_mouse_pos, mouse_pos,
+                         MOUSE_LINE_COLOR, LINE_THICKNESS, cv2.LINE_AA)
 
     # Show results with modified window handling
     cv2.imshow('Lipstick Lines', result)
@@ -936,15 +1414,40 @@ while True:
                 cv2.waitKey(30)
 
     elif key == ord('c'):
-        mesh_mode = not mesh_mode
+        # Don't directly toggle mesh_mode - we'll do that after the transition
+        current_mode = mesh_mode
+
+        # Perform camera fade transition when going from normal mode to mesh mode
+        # Only fade if there are lines to show
+        if not current_mode and len(line_points) > 0:
+            # Make sure the overlay has all current lines
+            if np.sum(overlay) == 0:  # If overlay is empty, redraw lines
+                temp_overlay = np.zeros((height, width, 3), dtype=np.uint8)
+                for i in range(0, len(line_points), 2):
+                    if i+1 < len(line_points):
+                        cv2.line(
+                            temp_overlay,
+                            line_points[i],
+                            line_points[i+1],
+                            (0, 0, 255),
+                            LINE_THICKNESS,
+                            cv2.LINE_AA
+                        )
+                overlay = temp_overlay
+
+            # Perform the camera fade transition
+            perform_camera_fade_transition(frame, overlay)
+
+        # Now toggle mesh mode and set up required parameters
+        mesh_mode = not current_mode
         show_only_lines = True
-        fade_alpha = 0.0
+        fade_alpha = 0.0  # Ensure camera is hidden
         current_mesh_speed = INITIAL_MESH_SPEED
-        transition_alpha = 0.0  # Reset transition
+        transition_alpha = 0.0  # Reset mesh transition
 
         if mesh_mode and contours:
             current_contour = max(contours, key=cv2.contourArea)
-            # Initialize slow velocities for all points
+            # Initialize velocities for all points
             point_velocities = []
             for i in range(len(line_points)):
                 angle = random.uniform(0, 2 * math.pi)
@@ -954,7 +1457,19 @@ while True:
                     speed * math.sin(angle)
                 ))
         else:
+            # Going back to line mode
             overlay = np.zeros((height, width, 3), dtype=np.uint8)
+            # Redraw all lines in overlay
+            for i in range(0, len(line_points), 2):
+                if i+1 < len(line_points):
+                    cv2.line(
+                        overlay,
+                        line_points[i],
+                        line_points[i+1],
+                        (0, 0, 255),
+                        LINE_THICKNESS,
+                        cv2.LINE_AA
+                    )
             point_velocities = []
             current_contour = None
 
@@ -1008,6 +1523,41 @@ while True:
                     x + random.randint(-5, 5),
                     y + random.randint(-5, 5)
                 )
+
+    # Add this to the main loop, after other key handlers but before the frame counter update
+    elif key == ord('t'):  # Handle 't' key for triggering movement
+        if not mesh_mode and line_points:  # Only trigger in line mode
+            trigger_movement_active = True
+            trigger_frame_count = 0
+            print("Movement triggered!")  # Debug feedback
+
+    # Add to the key handling section (after other key handlers)
+    elif key == ord('d'):  # Toggle mouse drawing mode with 'd' key
+        MOUSE_DRAWING_MODE = not MOUSE_DRAWING_MODE
+        # Reset mouse state when toggling
+        mouse_button_down = False
+        prev_mouse_pos = None
+        print(f"Mouse drawing mode: {'ON' if MOUSE_DRAWING_MODE else 'OFF'}")
+
+    # Add to the key handling section (after other key handlers)
+    elif key == ord('h'):  # Toggle indicators with 'h' key
+        # Remove the global declaration since SHOW_INDICATORS is already a global variable
+        SHOW_INDICATORS = not SHOW_INDICATORS
+        print(f"Indicators {'visible' if SHOW_INDICATORS else 'hidden'}")
+
+    # Add new key handler for releasing lines (use 'e' for "escape")
+    elif key == ord('e'):  # Release lines from contours
+        if not mesh_mode:
+            if not released_lines:
+                if release_lines_from_contour():
+                    print("Lines released!")
+                    # Keep video visible (don't set show_only_lines=True)
+                    # Keep normal fade_alpha to maintain video visibility
+                    released_lines = True
+            else:
+                # Toggle back to normal mode
+                released_lines = False
+                print("Lines back to normal mode")
 
     # Modified fade effect
     if show_only_lines and fade_alpha > 0:
